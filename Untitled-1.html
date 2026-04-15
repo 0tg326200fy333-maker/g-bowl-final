@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>G-MONITOR iPhone Solo</title>
+    <style>
+        body { background-color: #000; display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; margin: 0; overflow: hidden; font-family: 'Arial Black', sans-serif; }
+        canvas { background-color: #050505; max-width: 100%; height: auto; }
+        #startBtn { 
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            padding: 20px 40px; font-size: 20px; background: #FF4500; color: white; 
+            border: none; border-radius: 50px; cursor: pointer; z-index: 10; font-weight: bold;
+            box-shadow: 0 0 20px rgba(255, 69, 0, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <button id="startBtn" onclick="requestPermission()">SENSOR START</button>
+    <canvas id="gCanvas" width="800" height="480"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gCanvas');
+        const ctx = canvas.getContext('2d');
+        const startBtn = document.getElementById('startBtn');
+
+        let accX = 0, accY = 0, currentG = 0, maxG = 0;
+        let history = [];
+        const orange = "#FF4500";
+        const sensitivity = 80;
+
+        // --- iPhoneのセンサーを起動する関数 ---
+        function requestPermission() {
+            if (typeof DeviceMotionEvent.requestPermission === 'function') {
+                // iPhone (iOS 13以降) の場合
+                DeviceMotionEvent.requestPermission()
+                    .then(response => {
+                        if (response == 'granted') {
+                            startSensor();
+                        } else {
+                            alert("センサーの許可が拒否されました");
+                        }
+                    })
+                    .catch(console.error);
+            } else {
+                // AndroidやPCなどの場合
+                startSensor();
+            }
+        }
+
+        function startSensor() {
+            startBtn.style.display = 'none'; // ボタンを消す
+            window.addEventListener('devicemotion', (event) => {
+                // iPhoneのブラウザから直接重力を取得
+                // 軸の向きを調整 (iPhoneを縦置き/横置きした時の挙動に合わせて)
+                accX = event.accelerationIncludingGravity.x / 9.8;
+                accY = -event.accelerationIncludingGravity.y / 9.8; 
+                
+                currentG = Math.sqrt(accX * accX + accY * accY) - 1.0; // 静止状態で0Gにする補正
+                if(currentG < 0) currentG = 0; 
+                
+                if(currentG > maxG) maxG = currentG;
+                
+                history.unshift({x: accX, y: accY});
+                if(history.length > 20) history.pop();
+            });
+            draw(); // 描画開始
+        }
+
+        function drawMeter(x, y, radius, title, val) {
+            ctx.fillStyle = "#0a0a0a";
+            ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.fill();
+            ctx.strokeStyle = orange; ctx.lineWidth = 4;
+            ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.stroke();
+
+            // 目盛り
+            ctx.lineWidth = 2; ctx.font = "bold 14px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            for(let i = -1.5; i <= 1.5; i += 0.5) {
+                let angle = (-Math.PI / 2) + (i * (Math.PI / 4)); 
+                ctx.strokeStyle = "white";
+                ctx.beginPath();
+                ctx.moveTo(x + Math.cos(angle) * (radius - 10), y + Math.sin(angle) * (radius - 10));
+                ctx.lineTo(x + Math.cos(angle) * radius, y + Math.sin(angle) * radius);
+                ctx.stroke();
+                ctx.fillStyle = "white";
+                ctx.fillText(Math.abs(i).toFixed(1), x + Math.cos(angle) * (radius - 25), y + Math.sin(angle) * (radius - 25));
+            }
+
+            // 針
+            let limitedVal = Math.max(-1.5, Math.min(1.5, val));
+            let needleAngle = (-Math.PI / 2) + (limitedVal * (Math.PI / 4));
+            ctx.strokeStyle = orange; ctx.lineWidth = 5; ctx.lineCap = "round";
+            ctx.beginPath(); ctx.moveTo(x, y);
+            ctx.lineTo(x + Math.cos(needleAngle) * (radius - 15), y + Math.sin(needleAngle) * (radius - 15));
+            ctx.stroke();
+
+            ctx.fillStyle = "white"; ctx.font = "bold 14px Arial";
+            ctx.fillText(title, x, y + radius + 30);
+        }
+
+        function draw() {
+            ctx.fillStyle = "black"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            drawMeter(150, 240, 90, "LATERAL G", accX); // 横G
+            drawMeter(650, 240, 90, "LONGITUDINAL G", accY); // 前後G
+
+            // 中央 G-BOWL
+            ctx.strokeStyle = orange; ctx.lineWidth = 6;
+            ctx.beginPath(); ctx.arc(400, 240, 120, 0, Math.PI * 2); ctx.stroke();
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
+            ctx.beginPath(); ctx.arc(400, 240, 40, 0, Math.PI * 2); ctx.stroke();
+            ctx.beginPath(); ctx.arc(400, 240, 80, 0, Math.PI * 2); ctx.stroke();
+
+            // リミッター
+            let limitR = 112; 
+            let dx = accX * sensitivity;
+            let dy = accY * sensitivity;
+            let d = Math.sqrt(dx*dx + dy*dy);
+            if(d > limitR) {
+                let a = Math.atan2(dy, dx);
+                dx = Math.cos(a) * limitR;
+                dy = Math.sin(a) * limitR;
+            }
+
+            // 残像
+            ctx.fillStyle = "rgba(255, 69, 0, 0.3)";
+            history.forEach(p => {
+                let hX = p.x * sensitivity;
+                let hY = p.y * sensitivity;
+                let hDist = Math.sqrt(hX*hX + hY*hY);
+                if(hDist > limitR) {
+                    let hAngle = Math.atan2(hY, hX);
+                    hX = Math.cos(hAngle) * limitR;
+                    hY = Math.sin(hAngle) * limitR;
+                }
+                ctx.beginPath(); ctx.arc(400 + hX, 240 + hY, 4, 0, Math.PI*2); ctx.fill();
+            });
+
+            // ドット
+            ctx.fillStyle = orange;
+            ctx.shadowBlur = 15; ctx.shadowColor = orange;
+            ctx.beginPath(); ctx.arc(400 + dx, 240 + dy, 9, 0, Math.PI*2); ctx.fill();
+            ctx.shadowBlur = 0;
+
+            // 数値
+            ctx.fillStyle = orange; ctx.textAlign = "center";
+            ctx.font = "bold 42px Arial"; ctx.fillText(currentG.toFixed(2) + " G", 400, 215);
+            ctx.fillStyle = "white"; ctx.font = "bold 20px Arial"; 
+            ctx.fillText("MAX: " + maxG.toFixed(2) + " G", 400, 395);
+
+            requestAnimationFrame(draw);
+        }
+    </script>
+</body>
+</html>
